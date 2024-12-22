@@ -23,22 +23,42 @@ async def proxy_task(
         async for message in source_ws:
             if isinstance(message, str):
                 try:
-                    # 尝试解析 JSON
                     data = json.loads(message)
                     print(f"[{name}] Forwarding JSON message: {data}")
-                    await target_ws.send(message)
+                    if not target_ws.closed:
+                        await target_ws.send(message)
+                    else:
+                        print(f"[{name}] Target WebSocket is closed")
+                        break
                 except json.JSONDecodeError:
                     print(f"[{name}] Forwarding text message: {message}")
-                    await target_ws.send(message)
+                    if not target_ws.closed:
+                        await target_ws.send(message)
+                    else:
+                        print(f"[{name}] Target WebSocket is closed")
+                        break
             elif isinstance(message, bytes):
                 print(f"[{name}] Forwarding binary message, length: {len(message)}")
-                await target_ws.send(message)
+                if not target_ws.closed:
+                    await target_ws.send(message)
+                else:
+                    print(f"[{name}] Target WebSocket is closed")
+                    break
     except websockets.exceptions.ConnectionClosed as e:
-        print(f"[{name}] Connection closed: {e}")
+        print(f"[{name}] Connection closed: code={e.code}, reason={e.reason}")
     except Exception as e:
         print(f"[{name}] Error in proxy task: {e}")
+        if not source_ws.closed:
+            await source_ws.close(1011, str(e))
     finally:
         print(f"[{name}] Proxy task ended")
+        # 确保两个连接都被关闭
+        for ws in [source_ws, target_ws]:
+            try:
+                if not ws.closed:
+                    await ws.close(1000, "Task ended")
+            except Exception as e:
+                print(f"Error closing WebSocket: {e}")
 
 async def create_proxy(
     client_websocket: WebSocketCommonProtocol, api_key: str, service_url: str = None
@@ -53,80 +73,89 @@ async def create_proxy(
         uri = f"wss://{HOST}/v1/models/{MODEL}:streamGenerateContent?key={api_key}"
     
     print(f"Connecting to {uri}")
+    server_websocket = None
 
     try:
-        async with websockets.connect(
+        server_websocket = await websockets.connect(
             uri,
             ping_interval=20,     # 启用 ping 保持连接
             max_size=None,        # 禁用消息大小限制
             compression=None,     # 禁用压缩
             close_timeout=5,      # 设置关闭超时
-        ) as server_websocket:
-            print("Connected to server")
-            
-            # Send initial setup message
-            setup_msg = {
-                "contents": [{
-                    "role": "user",
-                    "parts": [{"text": "Hello"}]
-                }],
-                "tools": [],
-                "safety_settings": [],
-                "generation_config": {
-                    "stop_sequences": [],
-                    "temperature": 0.9,
-                    "top_p": 1,
-                    "top_k": 1,
-                    "max_output_tokens": 2048,
-                }
+        )
+        
+        print("Connected to server")
+        
+        # Send initial setup message
+        setup_msg = {
+            "contents": [{
+                "role": "user",
+                "parts": [{"text": "Hello"}]
+            }],
+            "tools": [],
+            "safety_settings": [],
+            "generation_config": {
+                "stop_sequences": [],
+                "temperature": 0.9,
+                "top_p": 1,
+                "top_k": 1,
+                "max_output_tokens": 2048,
             }
-            
-            await server_websocket.send(json.dumps(setup_msg))
-            print("Sent setup message")
-            
-            # 创建双向代理任务
-            client_to_server_task = asyncio.create_task(
-                proxy_task(client_websocket, server_websocket, "client->server")
+        }
+        
+        await server_websocket.send(json.dumps(setup_msg))
+        print("Sent setup message")
+        
+        # 创建双向代理任务
+        client_to_server_task = asyncio.create_task(
+            proxy_task(client_websocket, server_websocket, "client->server")
+        )
+        server_to_client_task = asyncio.create_task(
+            proxy_task(server_websocket, client_websocket, "server->client")
+        )
+        
+        try:
+            # 等待任一任务完成
+            done, pending = await asyncio.wait(
+                [client_to_server_task, server_to_client_task],
+                return_when=asyncio.FIRST_COMPLETED
             )
-            server_to_client_task = asyncio.create_task(
-                proxy_task(server_websocket, client_websocket, "server->client")
-            )
             
-            try:
-                # 等待任一任务完成
-                done, pending = await asyncio.wait(
-                    [client_to_server_task, server_to_client_task],
-                    return_when=asyncio.FIRST_COMPLETED
-                )
-                
-                # 取消剩余任务
-                for task in pending:
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
-                
-                # 检查是否有任务出错
-                for task in done:
-                    try:
-                        await task
-                    except Exception as e:
-                        print(f"Task failed with error: {e}")
-                        raise
-                        
-            except Exception as e:
-                print(f"Error during message forwarding: {e}")
-                if not client_websocket.closed:
-                    await client_websocket.close(1011, str(e))
-                raise
-                
+            # 取消剩余任务
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            
+            # 检查是否有任务出错
+            for task in done:
+                try:
+                    await task
+                except Exception as e:
+                    print(f"Task failed with error: {e}")
+                    raise
+                    
+        except Exception as e:
+            print(f"Error during message forwarding: {e}")
+            if not client_websocket.closed:
+                await client_websocket.close(1011, str(e))
+            raise
+            
     except Exception as e:
         print(f"Connection error: {e}")
         error_msg = {"error": str(e)}
         if not client_websocket.closed:
             await client_websocket.send(json.dumps(error_msg))
             await client_websocket.close(1011, str(e))
+    finally:
+        # 确保服务器连接被关闭
+        if server_websocket and not server_websocket.closed:
+            try:
+                await server_websocket.close()
+            except Exception as e:
+                print(f"Error closing server WebSocket: {e}")
 
 async def handle_client(client_websocket: WebSocketServerProtocol) -> None:
     """
