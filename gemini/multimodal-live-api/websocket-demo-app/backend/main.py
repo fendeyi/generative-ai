@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from websockets.server import serve
+import websockets
 from websockets.exceptions import ConnectionClosed
 from websockets.legacy.protocol import WebSocketCommonProtocol
 from websockets.legacy.server import WebSocketServerProtocol
@@ -111,7 +111,7 @@ async def create_proxy(
         logger.info(f"Connecting to {uri}")
         
         try:
-            server_websocket = await WebSocketCommonProtocol.connect(
+            server_websocket = await websockets.connect(
                 uri,
                 ping_interval=20,     # 启用 ping 保持连接
                 max_size=None,        # 禁用消息大小限制
@@ -126,19 +126,12 @@ async def create_proxy(
         
         # Send initial setup message
         setup_msg = {
-            "contents": [{
-                "role": "user",
-                "parts": [{"text": "Hello"}]
-            }],
-            "tools": [],
-            "safety_settings": [],
-            "generation_config": {
-                "stop_sequences": [],
-                "temperature": 0.9,
-                "top_p": 1,
-                "top_k": 1,
-                "max_output_tokens": 2048,
-            }
+            "model": MODEL,
+            "projectId": "628212147429",
+            "mode": "gemini-2.0-flash-exp",
+            "modelUri": "models/gemini-2.0-flash-exp",
+            "responseModalities": ["AUDIO"],
+            "systemInstructions": ""
         }
         
         await server_websocket.send(json.dumps(setup_msg))
@@ -237,7 +230,8 @@ async def main() -> None:
     """
     Main entry point for the WebSocket proxy server.
     """
-    async with serve(handle_client, "localhost", 8000):
+    async with websockets.serve(handle_client, "localhost", 8000):
+        logger.info("WebSocket server running on ws://localhost:8000")
         await asyncio.Future()  # run forever
 
 if __name__ == "__main__":
