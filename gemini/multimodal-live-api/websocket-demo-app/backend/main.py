@@ -16,6 +16,26 @@ class WebSocketError(Exception):
         super().__init__(message)
         self.code = code
 
+async def is_websocket_closed(ws) -> bool:
+    """检查 WebSocket 连接是否已关闭"""
+    try:
+        if hasattr(ws, 'closed'):
+            return ws.closed
+        if hasattr(ws, 'close_code'):
+            return ws.close_code is not None
+        return False
+    except Exception:
+        return True
+
+async def close_websocket(ws, code=1000, reason="Normal closure"):
+    """安全地关闭 WebSocket 连接"""
+    try:
+        if hasattr(ws, 'close'):
+            if not await is_websocket_closed(ws):
+                await ws.close(code, reason)
+    except Exception as e:
+        print(f"Error closing WebSocket: {e}")
+
 async def proxy_task(
     source_ws: WebSocketCommonProtocol, target_ws: WebSocketCommonProtocol,
     name: str = "unnamed"
@@ -30,21 +50,21 @@ async def proxy_task(
                 try:
                     data = json.loads(message)
                     print(f"[{name}] Forwarding JSON message: {data}")
-                    if not target_ws.closed:
+                    if not await is_websocket_closed(target_ws):
                         await target_ws.send(message)
                     else:
                         print(f"[{name}] Target WebSocket is closed")
                         break
                 except json.JSONDecodeError:
                     print(f"[{name}] Forwarding text message: {message}")
-                    if not target_ws.closed:
+                    if not await is_websocket_closed(target_ws):
                         await target_ws.send(message)
                     else:
                         print(f"[{name}] Target WebSocket is closed")
                         break
             elif isinstance(message, bytes):
                 print(f"[{name}] Forwarding binary message, length: {len(message)}")
-                if not target_ws.closed:
+                if not await is_websocket_closed(target_ws):
                     await target_ws.send(message)
                 else:
                     print(f"[{name}] Target WebSocket is closed")
@@ -69,7 +89,7 @@ async def create_proxy(
         if service_url:
             uri = f"{service_url}?key={api_key}"
         else:
-            uri = f"wss://{HOST}/v1/models/{MODEL}:streamGenerateContent?key={api_key}"
+            uri = f"wss://{HOST}/v1beta/models/{MODEL}:streamGenerateContent?key={api_key}"
         
         print(f"Connecting to {uri}")
         
@@ -143,29 +163,26 @@ async def create_proxy(
             raise WebSocketError(str(e))
             
     except WebSocketError as e:
-        if not client_websocket.closed:
+        if not await is_websocket_closed(client_websocket):
             error_msg = {"error": str(e)}
             try:
                 await client_websocket.send(json.dumps(error_msg))
-                await client_websocket.close(e.code, str(e))
+                await close_websocket(client_websocket, e.code, str(e))
             except:
                 pass
     except Exception as e:
         print(f"Unexpected error: {e}")
-        if not client_websocket.closed:
+        if not await is_websocket_closed(client_websocket):
             error_msg = {"error": str(e)}
             try:
                 await client_websocket.send(json.dumps(error_msg))
-                await client_websocket.close(1011, str(e))
+                await close_websocket(client_websocket, 1011, str(e))
             except:
                 pass
     finally:
         # 确保服务器连接被关闭
-        if server_websocket and not server_websocket.closed:
-            try:
-                await server_websocket.close()
-            except Exception as e:
-                print(f"Error closing server WebSocket: {e}")
+        if server_websocket:
+            await close_websocket(server_websocket)
 
 async def handle_client(client_websocket: WebSocketServerProtocol) -> None:
     """
@@ -199,24 +216,23 @@ async def handle_client(client_websocket: WebSocketServerProtocol) -> None:
             
     except asyncio.TimeoutError:
         print("Authentication timeout")
-        if not client_websocket.closed:
-            await client_websocket.close(4001, "Authentication timeout")
+        await close_websocket(client_websocket, 4001, "Authentication timeout")
     except WebSocketError as e:
         print(f"WebSocket error: {e}")
-        if not client_websocket.closed:
+        if not await is_websocket_closed(client_websocket):
             error_msg = {"error": str(e)}
             try:
                 await client_websocket.send(json.dumps(error_msg))
-                await client_websocket.close(e.code, str(e))
+                await close_websocket(client_websocket, e.code, str(e))
             except:
                 pass
     except Exception as e:
         print(f"Unexpected error: {e}")
-        if not client_websocket.closed:
+        if not await is_websocket_closed(client_websocket):
             error_msg = {"error": str(e)}
             try:
                 await client_websocket.send(json.dumps(error_msg))
-                await client_websocket.close(1011, str(e))
+                await close_websocket(client_websocket, 1011, str(e))
             except:
                 pass
 
