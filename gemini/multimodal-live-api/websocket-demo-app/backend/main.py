@@ -89,8 +89,8 @@ async def main() -> None:
     """
     Starts the WebSocket server and listens for incoming client connections.
     """
-    async with websockets.serve(handle_client, "localhost", 8080):
-        print("Running websocket server localhost:8080...")
+    async with websockets.serve(handle_client, "localhost", 8000):
+        print("Running websocket server localhost:8000...")
         # Run forever
         await asyncio.Future()
 
