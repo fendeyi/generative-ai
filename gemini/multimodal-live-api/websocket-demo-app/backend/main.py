@@ -5,13 +5,11 @@ import websockets
 from websockets.legacy.protocol import WebSocketCommonProtocol
 from websockets.legacy.server import WebSocketServerProtocol
 
-HOST = "us-central1-aiplatform.googleapis.com"
-SERVICE_URL = f"wss://{HOST}/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent"
+HOST = "generativelanguage.googleapis.com"
+SERVICE_URL = f"wss://{HOST}/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent"
 
-DEBUG = False
-
-MODEL = "your_model_name"  # Replace with your actual model name
-
+MODEL = "gemini-2.0-flash-exp"  # 使用您的实际模型名称
+DEBUG = True
 
 async def proxy_task(
     client_websocket: WebSocketCommonProtocol, server_websocket: WebSocketCommonProtocol
@@ -54,15 +52,9 @@ async def create_proxy(
     
     print(f"Connecting to {uri}")
 
-    headers = {
-        "Content-Type": "application/json",
-        "X-Goog-Api-Key": api_key
-    }
-
     try:
         async with websockets.connect(
             uri,
-            extra_headers=headers,
             ping_interval=None  # 禁用 ping 以避免超时问题
         ) as server_websocket:
             # Send initial setup message

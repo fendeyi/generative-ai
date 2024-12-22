@@ -24,13 +24,13 @@ class GeminiLiveAPI {
 
         this.projectId = projectId;
         this.model = model;
-        this.modelUri = `projects/${this.projectId}/locations/us-central1/publishers/google/models/${this.model}`;
+        this.modelUri = `models/${this.model}`;
 
         this.responseModalities = ["AUDIO"];
         this.systemInstructions = "";
 
         this.apiHost = apiHost;
-        this.serviceUrl = `wss://${this.apiHost}/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent`;
+        this.serviceUrl = `wss://${this.apiHost}/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent`;
 
         this.onReceiveResponse = (message) => {
             console.log("Default message received callback", message);
@@ -52,7 +52,7 @@ class GeminiLiveAPI {
 
     setProjectId(projectId) {
         this.projectId = projectId;
-        this.modelUri = `projects/${this.projectId}/locations/us-central1/publishers/google/models/${this.model}`;
+        this.modelUri = `models/${this.model}`;
     }
 
     setAccessToken(newAccessToken) {
