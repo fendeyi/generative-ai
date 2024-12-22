@@ -26,11 +26,11 @@ class GeminiLiveAPI {
         this.model = model;
         this.modelUri = `models/${this.model}`;
 
-        this.responseModalities = ["AUDIO"];
-        this.systemInstructions = "";
-
         this.apiHost = apiHost;
         this.serviceUrl = `wss://${this.apiHost}/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent`;
+
+        this.responseModalities = ["AUDIO"];
+        this.systemInstructions = "";
 
         this.onReceiveResponse = (message) => {
             console.log("Default message received callback", message);
@@ -45,7 +45,12 @@ class GeminiLiveAPI {
         };
 
         this.accessToken = "";
-        this.websocket = null;
+        this.webSocket = null;
+        this.connecting = false;
+
+        this.maxRetries = 3;
+        this.retryCount = 0;
+        this.retryDelay = 1000; // 1 second
 
         console.log("Created Gemini Live API object: ", this);
     }
@@ -62,17 +67,13 @@ class GeminiLiveAPI {
 
     connect(accessToken) {
         this.accessToken = accessToken;
+        this.retryCount = 0;
         console.log("Connecting with access token");
-        
-        try {
-            this.setupWebSocketToService();
-        } catch (error) {
-            console.error("Error setting up WebSocket:", error);
-            this.onErrorMessage("Failed to establish connection: " + error.message);
-        }
+        this.setupWebSocketToService();
     }
 
     disconnect() {
+        this.retryCount = this.maxRetries; // 防止重连
         if (this.webSocket) {
             try {
                 this.webSocket.close(1000, "Client disconnecting");
@@ -110,7 +111,7 @@ class GeminiLiveAPI {
         try {
             console.log("Received WebSocket message:", messageEvent.data);
             const response = JSON.parse(messageEvent.data);
-            
+
             if (response.error) {
                 console.error("Server error:", response.error);
                 this.onErrorMessage(response.error);
@@ -133,32 +134,60 @@ class GeminiLiveAPI {
     }
 
     setupWebSocketToService() {
-        if (this.webSocket) {
-            console.log("Closing existing WebSocket connection");
-            this.webSocket.close();
+        if (this.connecting) {
+            console.log("Connection attempt already in progress");
+            return;
         }
 
-        console.log("Setting up WebSocket connection to:", this.proxyUrl);
-        this.webSocket = new WebSocket(this.proxyUrl);
-
-        this.webSocket.onopen = (event) => {
-            console.log("WebSocket connection opened");
-            this.sendInitialSetupMessages();
-        };
-
-        this.webSocket.onclose = (event) => {
-            console.log("WebSocket connection closed:", event);
-            if (event.code !== 1000) {
-                this.onErrorMessage(`Connection closed: ${event.reason || 'Unknown reason'}`);
+        if (this.webSocket) {
+            console.log("Closing existing WebSocket connection");
+            try {
+                this.webSocket.close();
+            } catch (error) {
+                console.error("Error closing existing connection:", error);
             }
-        };
+            this.webSocket = null;
+        }
 
-        this.webSocket.onerror = (event) => {
-            console.error("WebSocket error:", event);
-            this.onErrorMessage("Connection error occurred");
-        };
+        this.connecting = true;
+        console.log("Setting up WebSocket connection to:", this.proxyUrl);
 
-        this.webSocket.onmessage = this.onReceiveMessage.bind(this);
+        try {
+            this.webSocket = new WebSocket(this.proxyUrl);
+
+            this.webSocket.onopen = (event) => {
+                console.log("WebSocket connection opened");
+                this.connecting = false;
+                this.retryCount = 0;
+                this.sendInitialSetupMessages();
+                this.onConnectionStarted();
+            };
+
+            this.webSocket.onclose = (event) => {
+                console.log("WebSocket connection closed:", event);
+                this.connecting = false;
+
+                if (event.code !== 1000 && this.retryCount < this.maxRetries) {
+                    console.log(`Retrying connection (${this.retryCount + 1}/${this.maxRetries})`);
+                    this.retryCount++;
+                    setTimeout(() => this.setupWebSocketToService(), this.retryDelay);
+                } else if (event.code !== 1000) {
+                    this.onErrorMessage(`Connection closed: ${event.reason || 'Unknown reason'}`);
+                }
+            };
+
+            this.webSocket.onerror = (event) => {
+                console.error("WebSocket error:", event);
+                this.connecting = false;
+                this.onErrorMessage("Connection error occurred");
+            };
+
+            this.webSocket.onmessage = this.onReceiveMessage.bind(this);
+        } catch (error) {
+            console.error("Error creating WebSocket:", error);
+            this.connecting = false;
+            this.onErrorMessage("Failed to create connection: " + error.message);
+        }
     }
 
     sendInitialSetupMessages() {

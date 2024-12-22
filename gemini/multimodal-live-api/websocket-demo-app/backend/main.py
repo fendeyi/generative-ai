@@ -11,6 +11,11 @@ SERVICE_URL = f"wss://{HOST}/ws/google.ai.generativelanguage.v1alpha.GenerativeS
 MODEL = "gemini-2.0-flash-exp"  # 使用您的实际模型名称
 DEBUG = True
 
+class WebSocketError(Exception):
+    def __init__(self, message, code=1011):
+        super().__init__(message)
+        self.code = code
+
 async def proxy_task(
     source_ws: WebSocketCommonProtocol, target_ws: WebSocketCommonProtocol,
     name: str = "unnamed"
@@ -46,19 +51,10 @@ async def proxy_task(
                     break
     except websockets.exceptions.ConnectionClosed as e:
         print(f"[{name}] Connection closed: code={e.code}, reason={e.reason}")
+        raise WebSocketError(f"Connection closed: {e.reason}", e.code)
     except Exception as e:
         print(f"[{name}] Error in proxy task: {e}")
-        if not source_ws.closed:
-            await source_ws.close(1011, str(e))
-    finally:
-        print(f"[{name}] Proxy task ended")
-        # 确保两个连接都被关闭
-        for ws in [source_ws, target_ws]:
-            try:
-                if not ws.closed:
-                    await ws.close(1000, "Task ended")
-            except Exception as e:
-                print(f"Error closing WebSocket: {e}")
+        raise WebSocketError(str(e))
 
 async def create_proxy(
     client_websocket: WebSocketCommonProtocol, api_key: str, service_url: str = None
@@ -67,22 +63,27 @@ async def create_proxy(
     Establishes a WebSocket connection to the server and creates two tasks for
     bidirectional message forwarding between the client and the server.
     """
-    if service_url:
-        uri = f"{service_url}?key={api_key}"
-    else:
-        uri = f"wss://{HOST}/v1/models/{MODEL}:streamGenerateContent?key={api_key}"
-    
-    print(f"Connecting to {uri}")
     server_websocket = None
-
+    
     try:
-        server_websocket = await websockets.connect(
-            uri,
-            ping_interval=20,     # 启用 ping 保持连接
-            max_size=None,        # 禁用消息大小限制
-            compression=None,     # 禁用压缩
-            close_timeout=5,      # 设置关闭超时
-        )
+        if service_url:
+            uri = f"{service_url}?key={api_key}"
+        else:
+            uri = f"wss://{HOST}/v1/models/{MODEL}:streamGenerateContent?key={api_key}"
+        
+        print(f"Connecting to {uri}")
+        
+        try:
+            server_websocket = await websockets.connect(
+                uri,
+                ping_interval=20,     # 启用 ping 保持连接
+                max_size=None,        # 禁用消息大小限制
+                compression=None,     # 禁用压缩
+                close_timeout=5,      # 设置关闭超时
+            )
+        except Exception as e:
+            print(f"Failed to connect to server: {e}")
+            raise WebSocketError(f"Failed to connect to server: {e}")
         
         print("Connected to server")
         
@@ -136,19 +137,28 @@ async def create_proxy(
                 except Exception as e:
                     print(f"Task failed with error: {e}")
                     raise
-                    
+            
         except Exception as e:
             print(f"Error during message forwarding: {e}")
-            if not client_websocket.closed:
-                await client_websocket.close(1011, str(e))
-            raise
+            raise WebSocketError(str(e))
             
-    except Exception as e:
-        print(f"Connection error: {e}")
-        error_msg = {"error": str(e)}
+    except WebSocketError as e:
         if not client_websocket.closed:
-            await client_websocket.send(json.dumps(error_msg))
-            await client_websocket.close(1011, str(e))
+            error_msg = {"error": str(e)}
+            try:
+                await client_websocket.send(json.dumps(error_msg))
+                await client_websocket.close(e.code, str(e))
+            except:
+                pass
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        if not client_websocket.closed:
+            error_msg = {"error": str(e)}
+            try:
+                await client_websocket.send(json.dumps(error_msg))
+                await client_websocket.close(1011, str(e))
+            except:
+                pass
     finally:
         # 确保服务器连接被关闭
         if server_websocket and not server_websocket.closed:
@@ -179,7 +189,7 @@ async def handle_client(client_websocket: WebSocketServerProtocol) -> None:
                 api_key = auth_message
                 
             if not api_key:
-                raise ValueError("API key not found in auth message")
+                raise WebSocketError("API key not found in auth message", 4000)
                 
             await create_proxy(client_websocket, api_key, service_url)
                 
@@ -189,12 +199,26 @@ async def handle_client(client_websocket: WebSocketServerProtocol) -> None:
             
     except asyncio.TimeoutError:
         print("Authentication timeout")
-        await client_websocket.close(1008, "Authentication timeout")
+        if not client_websocket.closed:
+            await client_websocket.close(4001, "Authentication timeout")
+    except WebSocketError as e:
+        print(f"WebSocket error: {e}")
+        if not client_websocket.closed:
+            error_msg = {"error": str(e)}
+            try:
+                await client_websocket.send(json.dumps(error_msg))
+                await client_websocket.close(e.code, str(e))
+            except:
+                pass
     except Exception as e:
-        print(f"Error during authentication: {e}")
-        error_msg = {"error": str(e)}
-        await client_websocket.send(json.dumps(error_msg))
-        await client_websocket.close(1008, str(e))
+        print(f"Unexpected error: {e}")
+        if not client_websocket.closed:
+            error_msg = {"error": str(e)}
+            try:
+                await client_websocket.send(json.dumps(error_msg))
+                await client_websocket.close(1011, str(e))
+            except:
+                pass
 
 async def main() -> None:
     """
