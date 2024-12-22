@@ -106,12 +106,13 @@ class GeminiLiveAPI {
     }
 
     sendInitialSetupMessages() {
-        const serviceSetupMessage = {
-            bearer_token: this.accessToken,
-            service_url: this.serviceUrl,
+        // 发送认证消息
+        const authMessage = {
+            api_key: this.accessToken
         };
-        this.sendMessage(serviceSetupMessage);
+        this.sendMessage(authMessage);
 
+        // 发送会话设置消息
         const sessionSetupMessage = {
             setup: {
                 model: this.modelUri,

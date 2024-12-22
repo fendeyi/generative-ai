@@ -70,6 +70,7 @@ function connectBtnClick() {
     };
 
     geminiLiveApi.setProjectId(projectInput.value);
+    // 直接发送 API key
     geminiLiveApi.connect(accessTokenInput.value);
 }
 
