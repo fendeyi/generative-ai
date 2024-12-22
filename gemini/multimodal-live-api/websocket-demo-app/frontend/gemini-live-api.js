@@ -70,15 +70,40 @@ class GeminiLiveAPI {
     }
 
     sendMessage(message) {
-        this.webSocket.send(JSON.stringify(message));
+        if (this.webSocket && this.webSocket.readyState === WebSocket.OPEN) {
+            const messageStr = JSON.stringify(message);
+            console.log("Sending WebSocket message:", messageStr);
+            this.webSocket.send(messageStr);
+        } else {
+            console.error("WebSocket is not open");
+            this.onErrorMessage("WebSocket is not open");
+        }
     }
 
     onReceiveMessage(messageEvent) {
-        console.log("Message received: ", messageEvent);
-        const messageData = JSON.parse(messageEvent.data);
-        const message = new GeminiLiveResponseMessage(messageData);
-        console.log("onReceiveMessageCallBack this ", this);
-        this.onReceiveResponse(message);
+        try {
+            console.log("Received WebSocket message:", messageEvent.data);
+            const response = JSON.parse(messageEvent.data);
+            
+            if (response.error) {
+                console.error("Server error:", response.error);
+                this.onErrorMessage(response.error);
+                return;
+            }
+
+            if (response.candidates && response.candidates[0].content) {
+                const message = new GeminiLiveResponseMessage({
+                    serverContent: {
+                        modelTurn: response.candidates[0].content,
+                        turnComplete: !response.candidates[0].finishReason
+                    }
+                });
+                this.onReceiveResponse(message);
+            }
+        } catch (error) {
+            console.error("Error processing message:", error);
+            this.onErrorMessage("Error processing message: " + error.message);
+        }
     }
 
     setupWebSocketToService() {
@@ -119,16 +144,14 @@ class GeminiLiveAPI {
                 role: "user",
                 parts: [{ text: text }]
             }],
-            tools: [],
-            safety_settings: [],
             generation_config: {
-                stop_sequences: [],
                 temperature: 0.9,
                 top_p: 1,
                 top_k: 1,
                 max_output_tokens: 2048,
             }
         };
+        console.log("Sending text message:", textMessage);
         this.sendMessage(textMessage);
     }
 
