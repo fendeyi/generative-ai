@@ -111,33 +111,23 @@ class GeminiLiveAPI {
             api_key: this.accessToken
         };
         this.sendMessage(authMessage);
-
-        // 发送会话设置消息
-        const sessionSetupMessage = {
-            setup: {
-                model: this.modelUri,
-                generation_config: {
-                    response_modalities: this.responseModalities,
-                },
-                system_instruction: {
-                    parts: [{ text: this.systemInstructions }],
-                },
-            },
-        };
-        this.sendMessage(sessionSetupMessage);
     }
 
     sendTextMessage(text) {
         const textMessage = {
-            client_content: {
-                turns: [
-                    {
-                        role: "user",
-                        parts: [{ text: text }],
-                    },
-                ],
-                turn_complete: true,
-            },
+            contents: [{
+                role: "user",
+                parts: [{ text: text }]
+            }],
+            tools: [],
+            safety_settings: [],
+            generation_config: {
+                stop_sequences: [],
+                temperature: 0.9,
+                top_p: 1,
+                top_k: 1,
+                max_output_tokens: 2048,
+            }
         };
         this.sendMessage(textMessage);
     }

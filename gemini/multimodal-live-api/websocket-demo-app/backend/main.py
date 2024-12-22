@@ -12,25 +12,30 @@ MODEL = "gemini-2.0-flash-exp"  # 使用您的实际模型名称
 DEBUG = True
 
 async def proxy_task(
-    client_websocket: WebSocketCommonProtocol, server_websocket: WebSocketCommonProtocol
+    source_ws: WebSocketCommonProtocol, target_ws: WebSocketCommonProtocol
 ) -> None:
     """
-    Forwards messages from one WebSocket connection to another.
-
-    Args:
-        client_websocket: The WebSocket connection from which to receive messages.
-        server_websocket: The WebSocket connection to which to send messages.
+    Forwards messages from the source WebSocket to the target WebSocket.
     """
-    async for message in client_websocket:
-        try:
-            data = json.loads(message)
-            if DEBUG:
-                print("proxying: ", data)
-            await server_websocket.send(json.dumps(data))
-        except Exception as e:
-            print(f"Error processing message: {e}")
-
-    await server_websocket.close()
+    try:
+        async for message in source_ws:
+            if isinstance(message, str):
+                try:
+                    # 尝试解析 JSON
+                    data = json.loads(message)
+                    if DEBUG:
+                        print(f"Forwarding message: {data}")
+                    await target_ws.send(message)
+                except json.JSONDecodeError:
+                    print(f"Invalid JSON message: {message}")
+            elif isinstance(message, bytes):
+                if DEBUG:
+                    print(f"Forwarding binary message, length: {len(message)}")
+                await target_ws.send(message)
+    except websockets.exceptions.ConnectionClosed:
+        pass
+    except Exception as e:
+        print(f"Error in proxy_task: {e}")
 
 
 async def create_proxy(
@@ -55,17 +60,30 @@ async def create_proxy(
     try:
         async with websockets.connect(
             uri,
-            ping_interval=None  # 禁用 ping 以避免超时问题
+            ping_interval=None,  # 禁用 ping 以避免超时问题
+            max_size=None,      # 禁用消息大小限制
+            compression=None    # 禁用压缩
         ) as server_websocket:
             # Send initial setup message
-            setup_msg = {"setup": {"model": f"models/{MODEL}"}}
-            await server_websocket.send(json.dumps(setup_msg))
+            setup_msg = {
+                "contents": [{
+                    "role": "user",
+                    "parts": [{"text": "Hello"}]
+                }],
+                "tools": [],
+                "safety_settings": [],
+                "generation_config": {
+                    "stop_sequences": [],
+                    "temperature": 0.9,
+                    "top_p": 1,
+                    "top_k": 1,
+                    "max_output_tokens": 2048,
+                }
+            }
             
-            # Wait for setup response
-            raw_response = await server_websocket.recv()
-            setup_response = json.loads(raw_response)
-            print("Setup response:", setup_response)
-
+            await server_websocket.send(json.dumps(setup_msg))
+            print("Sent setup message")
+            
             # Create bidirectional proxy tasks
             client_to_server_task = asyncio.create_task(
                 proxy_task(client_websocket, server_websocket)
@@ -74,12 +92,20 @@ async def create_proxy(
                 proxy_task(server_websocket, client_websocket)
             )
             
-            await asyncio.gather(client_to_server_task, server_to_client_task)
+            try:
+                await asyncio.gather(client_to_server_task, server_to_client_task)
+            except Exception as e:
+                print(f"Error during message forwarding: {e}")
+                if not client_websocket.closed:
+                    await client_websocket.close(1011, str(e))
+                raise
+                
     except Exception as e:
         print(f"Connection error: {e}")
         error_msg = {"error": str(e)}
-        await client_websocket.send(json.dumps(error_msg))
-        await client_websocket.close(1001, str(e))
+        if not client_websocket.closed:
+            await client_websocket.send(json.dumps(error_msg))
+            await client_websocket.close(1011, str(e))
 
 
 async def handle_client(client_websocket: WebSocketServerProtocol) -> None:
