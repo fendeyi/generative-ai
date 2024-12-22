@@ -10,7 +10,8 @@ from websockets.protocol import State
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-HOST = "us-central1-aiplatform.googleapis.com"
+HOST = "generativelanguage.googleapis.com"
+WEBSOCKET_PATH = "/v1beta/models/{model}:streamGenerateContent"
 MODEL = "gemini-2.0-flash-exp"
 DEBUG = True
 
@@ -106,7 +107,7 @@ async def create_proxy(
         if service_url:
             uri = f"{service_url}?key={api_key}"
         else:
-            uri = f"wss://{HOST}/v1/models/{MODEL}:streamGenerateContent?key={api_key}"
+            uri = f"wss://{HOST}{WEBSOCKET_PATH.format(model=MODEL)}?key={api_key}"
         
         logger.info(f"Connecting to {uri}")
         
@@ -126,12 +127,19 @@ async def create_proxy(
         
         # Send initial setup message
         setup_msg = {
-            "model": MODEL,
-            "projectId": "628212147429",
-            "mode": "gemini-2.0-flash-exp",
-            "modelUri": "models/gemini-2.0-flash-exp",
-            "responseModalities": ["AUDIO"],
-            "systemInstructions": ""
+            "contents": [{
+                "role": "user",
+                "parts": [{"text": "Hello"}]
+            }],
+            "tools": [],
+            "safety_settings": [],
+            "generation_config": {
+                "stop_sequences": [],
+                "temperature": 0.9,
+                "top_p": 1,
+                "top_k": 1,
+                "max_output_tokens": 2048,
+            }
         }
         
         await server_websocket.send(json.dumps(setup_msg))
