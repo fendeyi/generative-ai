@@ -237,7 +237,7 @@ async def main() -> None:
     """
     Main entry point for the WebSocket proxy server.
     """
-    async with serve(handle_client, "localhost", 8765):
+    async with serve(handle_client, "localhost", 8000):
         await asyncio.Future()  # run forever
 
 if __name__ == "__main__":
